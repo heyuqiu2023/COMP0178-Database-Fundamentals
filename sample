@@ -1,6 +1,6 @@
 
 
-INSERT INTO Users (email, password_hash, username, role) VALUES
+INSERT INTO User (email, password_hash, username, role) VALUES
 ('seller1@example.com', 'password', 'SellerOne', 'seller'),
 ('seller2@example.com', 'password', 'SellerTwo', 'seller'),
 ('seller3@example.com', 'password', 'SellerThree', 'seller'),
