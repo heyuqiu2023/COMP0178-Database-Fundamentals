@@ -1,0 +1,160 @@
+/* Custom CSS for the auction site.
+   You can add your own styles here to override Bootstrap defaults or
+   customise the look and feel of your pages.  At present this file
+   contains minimal styling for demonstration purposes. */
+
+body {
+  padding-bottom: 60px; /* ensure content is not hidden by footer on pages with long content */
+}
+
+.itemDescription {
+  white-space: pre-line; /* preserve line breaks in item descriptions */
+}
+
+/* Hero section styling */
+/* Hero carousel and overlay styling */
+.hero-carousel {
+  height: 400px;         /* 固定高度，根据需要调整 */
+  position: relative;
+  overflow: hidden;         /* 允许小圆点“伸出”图片底部 */
+  border-radius: 0.5rem;
+  margin-bottom: 2.5rem;     /* 给小圆点和下面内容留空间 */
+}
+.hero-carousel .carousel-inner {
+  height: 100%;
+}
+.hero-carousel .carousel-item img {
+  height: 100%;
+  object-fit: cover;
+}
+.hero-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 10;
+  padding: 3rem 1rem;
+  /* Allow clicks to pass through to underlying carousel except interactive elements */
+  pointer-events: none;
+}
+.hero-overlay h1 {
+  font-weight: 700;
+}
+.hero-search-form .form-control {
+  border-top-left-radius: 0.5rem;
+  border-bottom-left-radius: 0.5rem;
+}
+.hero-search-form .btn {
+  border-top-right-radius: 0.5rem;
+  border-bottom-right-radius: 0.5rem;
+}
+
+/* Allow pointer events on inputs and buttons inside hero overlay */
+.hero-overlay form,
+.hero-overlay input,
+.hero-overlay button,
+.hero-overlay select {
+  pointer-events: auto;
+}
+
+/* Carousel indicators (dots) just below the hero image */
+/* 小圆点：放在灰色玻璃（hero-overlay）里面，跟玻璃高度绑定 */
+.hero-overlay .hero-dots {
+  position: absolute;
+  bottom: 28px;              /* 距离玻璃底部 28px —— 你可以随意调整：大 = 往上，小 = 往下 */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;               /* 在玻璃上层 */
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: auto;      /* 记得允许点击 */
+}
+
+/* 圆点本身样式保持不变，只是选择器稍微改一下 */
+.hero-overlay .hero-dots li {
+  width: 10px;
+  height: 10px;
+  background-color: rgba(0, 0, 0, 0.25);   /* 默认：浅色 */
+  border-radius: 50%;
+  margin: 0 4px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.hero-overlay .hero-dots li.active {
+  background-color: rgba(0, 0, 0, 0.8);    /* 当前那一张：深色 */
+}
+
+
+
+/* Off‑canvas filter panel styling */
+.filter-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 280px;
+  max-width: 80%;
+  height: 100%;
+  background-color: #fff;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.2);
+  transform: translateX(-100%);
+  transition: transform 0.3s ease;
+  z-index: 1050;
+  overflow-y: auto;
+}
+.filter-panel.open {
+  transform: translateX(0);
+}
+
+/* Filter panel header styling */
+.filter-header {
+  background-color: #f8f9fa;
+}
+
+/* Category filter styling */
+.category-filter .btn {
+  border-radius: 50rem; /* pill shape */
+  margin: 0.25rem;
+}
+.category-filter .btn.active {
+  background-color: #343a40;
+  color: #fff;
+}
+
+/* Auction card styling */
+.auction-card {
+  border: none;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+.auction-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.auction-card img {
+  border-top-left-radius: 0.5rem;
+  border-top-right-radius: 0.5rem;
+  height: 180px;
+  object-fit: cover;
+}
+.auction-card .card-title {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Footer spacing adjustments */
+.footer {
+  padding-top: 2rem;
+}
+
+/* Filter toggle button spacing */
+.filter-toggle-wrapper {
+  margin-top: 2.5rem;  /* 往下挪一点，如果还想更往下就再调大，比如 3rem、3.5rem */
+}
