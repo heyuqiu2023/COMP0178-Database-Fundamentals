@@ -1,0 +1,151 @@
+<?php include_once('header.php'); ?>
+<?php require_once('db.php'); ?>
+<?php require_once('notify.php'); ?>
+
+<div class="container">
+  <h2 class="my-3">Place bid result</h2>
+<?php
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+  echo '<div class="alert alert-warning">No bid details received. Please submit your bid from the listing page.</div>';
+  echo '</div>';
+  include_once('footer.php');
+  exit;
+}
+
+if (!isset($_SESSION['logged_in']) || !$_SESSION['logged_in']) {
+  echo '<div class="alert alert-warning">You must be logged in to place a bid.</div>';
+  echo '</div>';
+  include_once('footer.php');
+  exit;
+}
+
+$bidder_id = $_SESSION['user_id'] ?? null; // Ensure you set this at login/registration
+$item_id = isset($_POST['item_id']) ? (int)$_POST['item_id'] : 0;
+$bid_amount = isset($_POST['bid']) ? (float)$_POST['bid'] : 0.0;
+
+if ($item_id <= 0 || $bid_amount <= 0) {
+  echo '<div class="alert alert-danger">Invalid bid details.</div>';
+  echo '<p><a href="javascript:history.back()">Go back</a></p>';
+  echo '</div>';
+  include_once('footer.php');
+  exit;
+}
+
+$pdo = get_db();
+
+try {
+  // SERIALIZABLE helps avoid phantom reads for concurrent bidding
+  $pdo->beginTransaction();
+  $pdo->exec("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+
+  // Lock the auction row
+  $stmt = $pdo->prepare("SELECT * FROM Auction WHERE auction_id = ? FOR UPDATE");
+  $stmt->execute([$item_id]);
+  $auction = $stmt->fetch();
+
+  if (!$auction) {
+    throw new Exception('Auction not found.');
+  }
+
+  // Ensure auction is active and not ended
+  $now = new DateTimeImmutable('now');
+  $end_time = new DateTimeImmutable($auction['end_time']);
+  $status = $auction['status'];
+
+  if ($status !== 'active' || $now >= $end_time) {
+    // If time reached, close it within the transaction
+    if ($status !== 'ended') {
+      closeAuction($pdo, $auction);
+    }
+    throw new Exception('Auction has ended.');
+  }
+
+  // Find current highest bid
+  $stmt = $pdo->prepare("SELECT bid_id, bidder_id, bid_amount FROM Bid WHERE auction_id = ? AND is_active = TRUE ORDER BY bid_amount DESC, bid_time ASC LIMIT 1 FOR UPDATE");
+  $stmt->execute([$item_id]);
+  $highest = $stmt->fetch();
+
+  $current_high = $highest ? (float)$highest['bid_amount'] : (float)$auction['starting_price'];
+
+  if ($bid_amount <= $current_high) {
+    throw new Exception('Your bid must be higher than the current highest bid (£' . number_format($current_high, 2) . ').');
+  }
+
+  // Insert bid
+  $stmt = $pdo->prepare("INSERT INTO Bid (auction_id, bidder_id, bid_amount) VALUES (?, ?, ?)");
+  $stmt->execute([$item_id, $bidder_id, $bid_amount]);
+  $bid_id = (int)$pdo->lastInsertId();
+
+  // Notify watchers of new bid (including current high bidder)
+  queue_notification($bidder_id, $item_id, $bid_id, 'new_bid');
+
+  // If there was a previous highest bidder and it's different from current bidder, notify outbid
+  if ($highest && (int)$highest['bidder_id'] !== $bidder_id) {
+    queue_notification((int)$highest['bidder_id'], $item_id, $bid_id, 'outbid');
+  }
+
+  // Optional: record activity
+  $stmt = $pdo->prepare("INSERT INTO UserActivity (user_id, auction_id, action) VALUES (?, ?, 'bid')");
+  $stmt->execute([$bidder_id, $item_id]);
+
+  // Check if auction should end now (e.g., end_time passed within this tick)
+  if (new DateTimeImmutable('now') >= $end_time) {
+    closeAuction($pdo, $auction);
+  }
+
+  $pdo->commit();
+
+  echo '<div class="alert alert-success">Your bid of £' . number_format($bid_amount, 2) . ' has been placed.</div>';
+  echo '<p><a href="listing.php?item_id=' . urlencode((string)$item_id) . '">Return to listing</a> or <a href="browse.php">continue browsing</a>.</p>';
+
+} catch (Exception $e) {
+  if ($pdo->inTransaction()) $pdo->rollBack();
+  echo '<div class="alert alert-danger">' . htmlspecialchars($e->getMessage()) . '</div>';
+  echo '<p><a href="javascript:history.back()">Go back</a></p>';
+}
+
+// Helper: close auction, select winner, record outcome, notify users
+function closeAuction(PDO $pdo, array $auctionRow): void {
+  $auction_id = (int)$auctionRow['auction_id'];
+  $reserve_price = (float)$auctionRow['reserve_price'];
+  $seller_id = (int)$auctionRow['seller_id'];
+
+  // Find winning bid
+  $stmt = $pdo->prepare("SELECT bid_id, bidder_id, bid_amount FROM Bid WHERE auction_id = ? AND is_active = TRUE ORDER BY bid_amount DESC, bid_time ASC LIMIT 1 FOR UPDATE");
+  $stmt->execute([$auction_id]);
+  $winning = $stmt->fetch();
+
+  $winner_id = $winning ? (int)$winning['bidder_id'] : null;
+  $final_price = $winning ? (float)$winning['bid_amount'] : null;
+  $reserve_met = $winning ? ($final_price >= $reserve_price) : false;
+
+  // Mark auction ended
+  $pdo->prepare("UPDATE Auction SET status = 'ended' WHERE auction_id = ?")->execute([$auction_id]);
+
+  // Write AuctionOutcome
+  $accept_deadline = (new DateTimeImmutable('now'))->modify('+48 hours')->format('Y-m-d H:i:s');
+  $stmt = $pdo->prepare(
+    "INSERT INTO AuctionOutcome (auction_id, winner_id, final_price, reserve_met, seller_accepted, acceptance_deadline, concluded_at)
+     VALUES (?, ?, ?, ?, FALSE, ?, NOW())"
+  );
+  $stmt->execute([$auction_id, $winner_id, $final_price, $reserve_met, $accept_deadline]);
+
+  // Notifications: ended, and possibly reserve_not_met
+  require_once 'notify.php';
+  // Notify seller auction ended
+  queue_notification($seller_id, $auction_id, $winning ? (int)$winning['bid_id'] : null, 'auction_ended');
+
+  // Notify winner if exists
+  if ($winner_id) {
+    queue_notification($winner_id, $auction_id, (int)$winning['bid_id'], 'auction_ended');
+  }
+
+  if (!$reserve_met) {
+    // Notify seller reserve not met
+    queue_notification($seller_id, $auction_id, $winning ? (int)$winning['bid_id'] : null, 'reserve_not_met');
+  }
+}
+?>
+</div>
+
+<?php include_once('footer.php'); ?>
