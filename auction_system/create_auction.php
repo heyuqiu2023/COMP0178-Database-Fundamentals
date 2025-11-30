@@ -261,9 +261,51 @@ document.addEventListener('DOMContentLoaded', function(){
     if (added < files.length) alert('只接受前 ' + added + ' 个文件（最大总数 ' + MAX_TOTAL + '）。');
   });
 
-  // before submit, write accumulated files back to input
-  form.addEventListener('submit', function(){
-    try{ input.files = window._accFiles.files; } catch(err){ console.warn('assigning accumulated files failed', err); }
+  // before submit, try to write accumulated files back to input; if the browser prevents that, use AJAX fallback
+  form.addEventListener('submit', function(e){
+    // quick try: attempt to assign files and verify
+    try {
+      input.files = window._accFiles.files;
+      if (input.files && input.files.length === window._accFiles.files.length) {
+        // success — allow normal submit
+        return;
+      }
+    } catch(err) {
+      console.warn('assigning accumulated files failed', err);
+    }
+
+    // Fallback: build FormData manually and POST via fetch
+    e.preventDefault();
+    var fd = new FormData();
+    Array.from(form.elements).forEach(function(el){
+      if (!el.name) return;
+      // skip file inputs — we'll append files from accumulator
+      if (el.type === 'file') return;
+      if (el.type === 'checkbox') {
+        if (el.checked) fd.append(el.name, el.value);
+        return;
+      }
+      if (el.tagName.toLowerCase() === 'select' && el.multiple) {
+        Array.from(el.options).forEach(function(opt){ if (opt.selected) fd.append(el.name, opt.value); });
+        return;
+      }
+      fd.append(el.name, el.value);
+    });
+    Array.from(window._accFiles.files).forEach(function(f){ fd.append('images[]', f); });
+
+    var submitBtn = form.querySelector('[type="submit"]');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.dataset.origText = submitBtn.textContent; submitBtn.textContent = 'Uploading...'; }
+
+    fetch(form.action, { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function(resp){ return resp.text(); })
+      .then(function(text){
+        // Replace current document with server response so user sees same success/failure page
+        document.open(); document.write(text); document.close();
+      }).catch(function(err){
+        console.error('AJAX upload failed', err);
+        alert('Upload failed: ' + err);
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = submitBtn.dataset.origText || 'Submit'; }
+      });
   });
 
   // initial render

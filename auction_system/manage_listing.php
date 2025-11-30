@@ -466,8 +466,35 @@ document.addEventListener('DOMContentLoaded', function(){
     if (added < files.length) alert('只接受前 ' + added + ' 个文件（总数上限 ' + MAX_TOTAL + '）。');
   });
 
-  form.addEventListener('submit', function(){
-    try{ input.files = window._accFilesEdit.files; } catch(err){ console.warn('assigning accumulated edit files failed', err); }
+  form.addEventListener('submit', function(e){
+    try{
+      input.files = window._accFilesEdit.files;
+      if (input.files && input.files.length === window._accFilesEdit.files.length) {
+        return; // allow normal submit
+      }
+    } catch(err){
+      console.warn('assigning accumulated edit files failed', err);
+    }
+
+    // AJAX fallback: build FormData manually including delete_images[] and other fields
+    e.preventDefault();
+    var fd = new FormData();
+    Array.from(form.elements).forEach(function(el){
+      if (!el.name) return;
+      if (el.type === 'file') return; // we'll append files separately
+      if (el.type === 'checkbox') { if (el.checked) fd.append(el.name, el.value); return; }
+      if (el.tagName.toLowerCase() === 'select' && el.multiple) { Array.from(el.options).forEach(function(opt){ if (opt.selected) fd.append(el.name, opt.value); }); return; }
+      fd.append(el.name, el.value);
+    });
+    Array.from(window._accFilesEdit.files).forEach(function(f){ fd.append('edit_images[]', f); });
+
+    var submitBtn = form.querySelector('[type="submit"]');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.dataset.origText = submitBtn.textContent; submitBtn.textContent = 'Uploading...'; }
+
+    fetch(window.location.href, { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function(resp){ return resp.text(); })
+      .then(function(text){ document.open(); document.write(text); document.close(); })
+      .catch(function(err){ console.error('AJAX edit upload failed', err); alert('Upload failed: '+err); if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = submitBtn.dataset.origText || 'Save Changes'; } });
   });
 
   renderEditPreview();
