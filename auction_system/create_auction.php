@@ -2,6 +2,8 @@
 <?php
 // Default end date for the datetime-local input: one day from now
 $default_end = date('Y-m-d\TH:i', strtotime('+1 day'));
+// Minimum allowed end date (now) - prevents selecting a past time in supporting browsers
+$min_end = date('Y-m-d\TH:i');
 ?>
 
 <div class="container">
@@ -79,16 +81,24 @@ if (isset($_SESSION['create_errors'])) {
           <div class="form-group row">
             <label for="auctionEndDate" class="col-sm-3 col-form-label text-right">End date</label>
             <div class="col-sm-9">
-              <input type="datetime-local" class="form-control" id="auctionEndDate" name="end_date"
-                     value="<?php echo isset($_SESSION['old_input']['end_date']) ? htmlspecialchars($_SESSION['old_input']['end_date']) : $default_end; ?>">
-              <small id="endDateHelp" class="form-text text-muted"><span class="text-danger">* Required.</span> Day and time for the auction to end.</small>
-            </div>
+            <input type="datetime-local" class="form-control" id="auctionEndDate" name="end_date"
+              step="60" min="<?php echo $min_end; ?>"
+              value="<?php echo isset($_SESSION['old_input']['end_date']) ? htmlspecialchars($_SESSION['old_input']['end_date']) : $default_end; ?>">
+                      <small id="endDateHelp" class="form-text text-muted"><span class="text-danger">* Required.</span> Day and time for the auction to end.</small>
+
+                      <!-- Quick-select buttons for common offsets -->
+                      <div class="btn-group btn-group-sm mt-2" role="group" aria-label="Quick time selectors">
+                        <button type="button" id="quickPlus1h" class="btn btn-outline-secondary">+1h</button>
+                        <button type="button" id="quickPlus1d" class="btn btn-outline-secondary">+1d</button>
+                      </div>
+                    </div>
           </div>
           <div class="form-group row">
             <label for="auctionImages" class="col-sm-3 col-form-label text-right">Images</label>
             <div class="col-sm-9">
               <input type="file" class="form-control-file" id="auctionImages" name="images[]" accept="image/*" multiple>
               <small id="imagesHelp" class="form-text text-muted">Optional. You can upload up to 5 images (jpg, png, gif). Each image max 2MB.</small>
+              <div id="imagesPreview" class="mt-2 d-flex flex-wrap"></div>
             </div>
           </div>
           <button type="submit" class="btn btn-primary form-control">Create Auction</button>
@@ -98,5 +108,167 @@ if (isset($_SESSION['create_errors'])) {
   </div>
 
 </div> <!-- End container -->
+
+<script>
+// Initialize flatpickr for consistent datetime selection (minute precision)
+window.addEventListener('load', function(){
+  var el = document.getElementById('auctionEndDate');
+  if (!el) return;
+
+  // PHP-provided defaults
+  var phpDefault = '<?php echo $default_end; ?>';
+  var phpMin = '<?php echo $min_end; ?>';
+  var phpOld = '<?php echo isset($_SESSION['old_input']['end_date']) ? htmlspecialchars($_SESSION['old_input']['end_date']) : ''; ?>';
+
+  // choose initial date: old input if present, else default
+  var initial = phpOld || phpDefault;
+
+  // wait for flatpickr to be available
+  if (typeof flatpickr === 'undefined') {
+    // if flatpickr not loaded, do nothing; browser will still show native control or text fallback
+    return;
+  }
+
+  var fp = flatpickr(el, {
+    enableTime: true,
+    noCalendar: false,
+    // Use escaped T (\T) so flatpickr does not insert literal quotes around it
+    dateFormat: "Y-m-d\\TH:i",
+    time_24hr: true,
+    minuteIncrement: 1,
+    defaultDate: initial,
+    minDate: phpMin,
+    onReady: function(selectedDates, dateStr, instance) {
+      if (dateStr) {
+        // ensure no accidental quotes are present
+        el.value = dateStr.replace(/'/g, '');
+      }
+    },
+    onChange: function(selectedDates, dateStr) {
+      // keep the input value in the desired format for backend parsing (strip any quotes)
+      el.value = dateStr ? dateStr.replace(/'/g, '') : '';
+    }
+  });
+
+  // Quick-select buttons: +1 hour and +1 day
+  function parseMinDate(str){
+    // flat string like YYYY-MM-DDTHH:MM -> safe for Date constructor in modern browsers
+    try {
+      return str ? new Date(str) : null;
+    } catch(e){
+      return null;
+    }
+  }
+
+  var minDateObj = parseMinDate(phpMin);
+
+  function addMinutesToPicker(minutes){
+    var cur = fp.selectedDates.length ? fp.selectedDates[0] : new Date();
+    var newDate = new Date(cur.getTime() + minutes * 60000);
+    // ensure newDate >= minDateObj
+    if (minDateObj && newDate < minDateObj) {
+      newDate = new Date(minDateObj.getTime());
+    }
+    fp.setDate(newDate, true);
+  }
+
+  var btn1h = document.getElementById('quickPlus1h');
+  var btn1d = document.getElementById('quickPlus1d');
+  if (btn1h) btn1h.addEventListener('click', function(){ addMinutesToPicker(60); });
+  if (btn1d) btn1d.addEventListener('click', function(){ addMinutesToPicker(60*24); });
+});
+</script>
+
+<script>
+// Improved cumulative file selection for #auctionImages
+document.addEventListener('DOMContentLoaded', function(){
+  var input = document.getElementById('auctionImages');
+  var preview = document.getElementById('imagesPreview');
+  var form = document.querySelector('form[action="create_auction_result.php"]');
+  if (!input || !preview || !form) return;
+
+  var MAX_TOTAL = 5;
+  // maintain a global accumulator so it persists if other scripts re-run
+  if (!window._accFiles) window._accFiles = new DataTransfer();
+
+  function render(){
+    preview.innerHTML = '';
+    Array.from(window._accFiles.files).forEach(function(file, idx){
+      var div = document.createElement('div');
+      div.className = 'm-1 position-relative';
+      div.style.width = '100px';
+      div.dataset.name = file.name;
+
+      var img = document.createElement('img');
+      img.style.width = '100%';
+      img.style.height = '80px';
+      img.style.objectFit = 'cover';
+      img.alt = file.name;
+      var reader = new FileReader();
+      reader.onload = function(e){ img.src = e.target.result; };
+      reader.readAsDataURL(file);
+
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn btn-sm btn-danger position-absolute';
+      removeBtn.style.top = '2px';
+      removeBtn.style.right = '2px';
+      removeBtn.textContent = '×';
+      removeBtn.title = 'Remove this file';
+      removeBtn.addEventListener('click', function(){
+        var dt = new DataTransfer();
+        Array.from(window._accFiles.files).forEach(function(f){
+          if (!(f.name === file.name && f.size === file.size && f.type === file.type)) dt.items.add(f);
+        });
+        window._accFiles = dt;
+        render();
+      });
+
+      div.appendChild(img);
+      div.appendChild(removeBtn);
+      preview.appendChild(div);
+    });
+
+    var remaining = MAX_TOTAL - window._accFiles.files.length;
+    if (remaining <= 0){
+      input.disabled = true;
+      input.title = '已达到 ' + MAX_TOTAL + ' 张上限，删除后可上传';
+    } else {
+      input.disabled = false;
+      input.title = '';
+    }
+  }
+
+  input.addEventListener('change', function(e){
+    var files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    var canAdd = MAX_TOTAL - window._accFiles.files.length;
+    if (canAdd <= 0){
+      alert('已达到 ' + MAX_TOTAL + ' 张图片上限。');
+      e.target.value = '';
+      return;
+    }
+    var added = 0;
+    files.forEach(function(f){
+      if (added >= canAdd) return;
+      if (f.size > 2*1024*1024) { console.warn('Skip file (too large):', f.name); return; }
+      window._accFiles.items.add(f);
+      added++;
+    });
+    // clear native input so selecting same files again will fire change
+    e.target.value = '';
+    render();
+    if (added < files.length) alert('只接受前 ' + added + ' 个文件（最大总数 ' + MAX_TOTAL + '）。');
+  });
+
+  // before submit, write accumulated files back to input
+  form.addEventListener('submit', function(){
+    try{ input.files = window._accFiles.files; } catch(err){ console.warn('assigning accumulated files failed', err); }
+  });
+
+  // initial render
+  render();
+});
+</script>
 
 <?php include_once('footer.php'); ?>

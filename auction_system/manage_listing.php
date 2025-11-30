@@ -102,28 +102,87 @@ if ($is_seller && isset($_POST['edit_auction']) && $num_bids == 0) {
     $new_end_time = $mysqli->real_escape_string($_POST['edit_end_time']);
 
 
-    // 图片处理
-    $new_images_sql = "";
-    if (!empty($_FILES['edit_images']['name'][0])) {
+  // 图片处理（支持保留/删除已有图片并添加新上传）
+  $new_images_sql = "";
 
-        $saved_images = [];
-        $upload_dir = __DIR__ . '/img/auctions/';
-        $web_dir = 'img/auctions/';
-        if (!is_dir($upload_dir)) mkdir($upload_dir,0755,true);
-
-        $files = $_FILES['edit_images'];
-        for ($i = 0; $i < count($files['name']); $i++) {
-            if ($files['error'][$i] === UPLOAD_ERR_OK) {
-                $tmp = $files['tmp_name'][$i];
-                $ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
-                $new_name = bin2hex(random_bytes(8))."_".time().".".$ext;
-                move_uploaded_file($tmp, $upload_dir.$new_name);
-                $saved_images[] = $web_dir.$new_name;
-            }
-        }
-        $new_image_url = implode(',', $saved_images);
-        $new_images_sql = ", img_url='$new_image_url'";
+  // Start from existing images stored in DB
+  $existing_images = [];
+  if (!empty($img_url)) {
+    $parts = array_map('trim', explode(',', $img_url));
+    foreach ($parts as $p) {
+      if ($p !== '') $existing_images[] = $p;
     }
+  }
+
+  // Handle deletions requested by the seller
+  $delete_list = $_POST['delete_images'] ?? [];
+  if (!empty($delete_list) && is_array($delete_list)) {
+    foreach ($delete_list as $d) {
+      $d = trim($d);
+      if ($d === '') continue;
+      $key = array_search($d, $existing_images);
+      if ($key !== false) {
+        // remove file from disk if exists
+        $file_path = __DIR__ . '/' . ltrim($d, '/');
+        if (file_exists($file_path)) {
+          @unlink($file_path);
+        }
+        unset($existing_images[$key]);
+      }
+    }
+    // reindex
+    $existing_images = array_values($existing_images);
+  }
+
+  // Process newly uploaded images and append to remaining existing images (max 5 total)
+  $maxImages = 5;
+  $currentCount = count($existing_images);
+  $remaining = $maxImages - $currentCount;
+  if ($remaining <= 0) {
+    // no room for new images
+    // ignore any uploaded files and optionally add an error message
+    if (!empty($_FILES['edit_images']['name'][0])) {
+      // preserve previous errors array if exists
+      $_SESSION['create_errors'] = array_merge($_SESSION['create_errors'] ?? [], ["You already have $currentCount images. Remove images before uploading more (max $maxImages)."]);
+    }
+  } else {
+    if (!empty($_FILES['edit_images']['name'][0])) {
+      $saved_images = [];
+      $upload_dir = __DIR__ . '/img/auctions/';
+      $web_dir = 'img/auctions/';
+      if (!is_dir($upload_dir)) mkdir($upload_dir,0755,true);
+
+      $files = $_FILES['edit_images'];
+      // only attempt up to $remaining files
+      $attempt = min(count($files['name']), $remaining);
+      $added = 0;
+      for ($i = 0; $i < count($files['name']) && $added < $remaining; $i++) {
+        if (empty($files['name'][$i])) continue;
+        if ($files['error'][$i] === UPLOAD_ERR_OK) {
+          $tmp = $files['tmp_name'][$i];
+          $ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
+          $new_name = bin2hex(random_bytes(8))."_".time().".".$ext;
+          if (move_uploaded_file($tmp, $upload_dir.$new_name)) {
+            $saved_images[] = $web_dir.$new_name;
+            $added++;
+          }
+        }
+      }
+      // merge saved images into existing set
+      if (!empty($saved_images)) {
+        $existing_images = array_merge($existing_images, $saved_images);
+      }
+      // if there were more uploaded files than remaining, inform seller
+      $totalUploaded = count(array_filter($files['name']));
+      if ($totalUploaded > $remaining) {
+        $_SESSION['create_errors'] = array_merge($_SESSION['create_errors'] ?? [], ["Only $remaining additional images were accepted (max $maxImages total)."]);
+      }
+    }
+  }
+
+  // Build SQL fragment for images (NULL if no images remain)
+  $new_image_url = !empty($existing_images) ? implode(',', $existing_images) : null;
+  $new_images_sql = ", img_url=" . ($new_image_url === null ? "NULL" : "'" . $mysqli->real_escape_string($new_image_url) . "'");
 
     $sql_update = "
       UPDATE Auction 
@@ -159,19 +218,43 @@ if ($is_seller && isset($_POST['edit_auction']) && $num_bids == 0) {
         <!-- 图片显示 -->
         <?php
           if (!empty($img_url)) {
-            $parts = explode(',', $img_url);
-            $first = normalize_image_src(trim($parts[0]));
-            echo '<div><img src="' . htmlspecialchars($first) . '" style="width:100%; max-height:420px; object-fit:cover;"></div>';
+              $parts = array_filter(array_map('trim', explode(',', $img_url)));
+              if (count($parts) > 1) {
+                  $cid = 'mainCarousel_' . htmlspecialchars($auction_id);
+                  echo '<div id="' . $cid . '" class="carousel slide" data-ride="carousel">';
+                  echo '<div class="carousel-inner">';
+                  $first = true;
+                  foreach ($parts as $p) {
+                      $src = htmlspecialchars(normalize_image_src($p));
+                      echo '<div class="carousel-item' . ($first ? ' active' : '') . '">';
+                      echo '<img src="' . $src . '" style="width:100%; max-height:420px; object-fit:cover;">';
+                      echo '</div>';
+                      $first = false;
+                  }
+                  echo '</div>';
+                  echo '<a class="carousel-control-prev" href="#' . $cid . '" role="button" data-slide="prev">';
+                  echo '<span class="carousel-control-prev-icon" aria-hidden="true"></span>';
+                  echo '<span class="sr-only">Previous</span>';
+                  echo '</a>';
+                  echo '<a class="carousel-control-next" href="#' . $cid . '" role="button" data-slide="next">';
+                  echo '<span class="carousel-control-next-icon" aria-hidden="true"></span>';
+                  echo '<span class="sr-only">Next</span>';
+                  echo '</a>';
+                  echo '</div>';
 
-            if (count($parts) > 1) {
-              echo '<div class="d-flex mt-2">';
-              foreach ($parts as $p) {
-                $p = trim($p);
-                echo '<img src="' . htmlspecialchars(normalize_image_src($p)) . '" style="width:80px; height:80px; object-fit:cover; margin-right:4px; border:1px solid #ddd;">';
+                  // thumbnails below
+                  echo '<div class="d-flex mt-2">';
+                  foreach ($parts as $idx => $p) {
+                      $p = trim($p);
+                      $img = htmlspecialchars(normalize_image_src($p));
+                      echo '<a href="#' . $cid . '" data-slide-to="' . intval($idx) . '"><img src="' . $img . '" style="width:80px; height:80px; object-fit:cover; margin-right:4px; border:1px solid #ddd;"></a>';
+                  }
+                  echo '</div>';
+              } else {
+                  $first = normalize_image_src($parts[0]);
+                  echo '<div><img src="' . htmlspecialchars($first) . '" style="width:100%; max-height:420px; object-fit:cover;"></div>';
               }
-              echo '</div>';
             }
-          }
         ?>
     </div>
 
@@ -256,7 +339,38 @@ if ($is_seller && isset($_POST['edit_auction']) && $num_bids == 0) {
 
       <div class="form-group mt-2">
         <label>Replace images (optional)</label>
-        <input type="file" name="edit_images[]" class="form-control" multiple>
+        <?php
+          $parts = !empty($img_url) ? array_filter(array_map('trim', explode(',', $img_url))) : [];
+          $currentCount = count($parts);
+          $maxImages = 5;
+          $remaining = max(0, $maxImages - $currentCount);
+        ?>
+        <?php if (!empty($parts)): ?>
+          <div class="mb-2">
+            <label>Current images (check to delete)</label>
+            <div class="d-flex flex-wrap">
+              <?php
+                foreach ($parts as $p) {
+                  if (empty($p)) continue;
+                  $safe = htmlspecialchars($p);
+                  echo '<div class="text-center mr-2" style="margin-right:10px">';
+                  echo '<img src="' . $safe . '" style="width:100px; height:100px; object-fit:cover; display:block; border:1px solid #ddd;">';
+                  echo '<div class="form-check"><input class="form-check-input" type="checkbox" name="delete_images[]" value="' . $safe . '" id="del_' . md5($p) . '">';
+                  echo '<label class="form-check-label" for="del_' . md5($p) . '">Delete</label></div>';
+                  echo '</div>';
+                }
+              ?>
+            </div>
+          </div>
+        <?php endif; ?>
+
+        <?php if ($remaining <= 0): ?>
+          <div class="alert alert-info">You have reached the maximum of <?= $maxImages ?> images. Delete existing images to upload more.</div>
+        <?php else: ?>
+          <small class="form-text text-muted">You can upload up to <?= $remaining ?> more image(s).</small>
+          <input type="file" id="editImagesInput" name="edit_images[]" class="form-control" multiple data-remaining="<?= $remaining ?>">
+          <div id="editImagesPreview" class="mt-2 d-flex flex-wrap"></div>
+        <?php endif; ?>
       </div>
 
       <button type="submit" name="edit_auction" class="btn btn-primary mt-3">Save Changes</button>
@@ -266,5 +380,98 @@ if ($is_seller && isset($_POST['edit_auction']) && $num_bids == 0) {
   <?php endif; ?>
 
 </div>
+
+<script>
+// Improved cumulative file selection for edit images (#editImagesInput)
+document.addEventListener('DOMContentLoaded', function(){
+  var input = document.getElementById('editImagesInput');
+  var preview = document.getElementById('editImagesPreview');
+  var form = document.querySelector('#edit-auction-form form');
+  if (!input || !preview || !form) return;
+
+  var existingCount = preview.querySelectorAll('img').length || 0;
+  var MAX_TOTAL = 5;
+  var remaining = Math.max(0, MAX_TOTAL - existingCount);
+
+  if (!window._accFilesEdit) window._accFilesEdit = new DataTransfer();
+
+  // ensure container for new previews exists
+  var newArea = document.getElementById('editNewPreview');
+  if (!newArea){
+    newArea = document.createElement('div');
+    newArea.id = 'editNewPreview';
+    preview.parentNode.insertBefore(newArea, preview.nextSibling);
+  }
+
+  function renderEditPreview(){
+    newArea.innerHTML = '';
+    Array.from(window._accFilesEdit.files).forEach(function(file){
+      var div = document.createElement('div');
+      div.className = 'm-1 position-relative';
+      div.style.width = '100px';
+      var img = document.createElement('img');
+      img.style.width = '100%';
+      img.style.height = '80px';
+      img.style.objectFit = 'cover';
+      var reader = new FileReader();
+      reader.onload = function(e){ img.src = e.target.result; };
+      reader.readAsDataURL(file);
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn btn-sm btn-danger position-absolute';
+      removeBtn.style.top = '2px';
+      removeBtn.style.right = '2px';
+      removeBtn.textContent = '×';
+      removeBtn.addEventListener('click', function(){
+        var dt = new DataTransfer();
+        Array.from(window._accFilesEdit.files).forEach(function(f){
+          if (!(f.name === file.name && f.size === file.size && f.type === file.type)) dt.items.add(f);
+        });
+        window._accFilesEdit = dt;
+        renderEditPreview();
+      });
+      div.appendChild(img);
+      div.appendChild(removeBtn);
+      newArea.appendChild(div);
+    });
+
+    var rem = MAX_TOTAL - existingCount - window._accFilesEdit.files.length;
+    if (rem <= 0){
+      input.disabled = true;
+      input.title = '已达到 ' + MAX_TOTAL + ' 张上限，删除后可上传';
+    } else {
+      input.disabled = false;
+      input.title = '你还可以上传 ' + rem + ' 张';
+    }
+  }
+
+  input.addEventListener('change', function(e){
+    var files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    var canAdd = Math.max(0, MAX_TOTAL - existingCount - window._accFilesEdit.files.length);
+    if (canAdd <= 0){
+      alert('已达到 ' + MAX_TOTAL + ' 张图片上限。');
+      e.target.value = '';
+      return;
+    }
+    var added = 0;
+    files.forEach(function(f){
+      if (added >= canAdd) return;
+      if (f.size > 2*1024*1024) { console.warn('Skip file (too large):', f.name); return; }
+      window._accFilesEdit.items.add(f);
+      added++;
+    });
+    e.target.value = '';
+    renderEditPreview();
+    if (added < files.length) alert('只接受前 ' + added + ' 个文件（总数上限 ' + MAX_TOTAL + '）。');
+  });
+
+  form.addEventListener('submit', function(){
+    try{ input.files = window._accFilesEdit.files; } catch(err){ console.warn('assigning accumulated edit files failed', err); }
+  });
+
+  renderEditPreview();
+});
+</script>
 
 <?php include_once('footer.php'); ?>

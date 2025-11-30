@@ -125,15 +125,38 @@ function print_listing_card($auction_id, $title, $desc, $price, $num_bids, $end_
     // correct link
     echo '<a href="manage_listing.php?auction_id=' . htmlspecialchars($auction_id) . '">';
 
-    // use real auction image if exists
-    if (!empty($img_url)) {
-        $parts = explode(',', $img_url);
-        $first = trim($parts[0]);
-        $img = normalize_image_src($first);
+  // use real auction images if exist: render a Bootstrap carousel when multiple images present
+  if (!empty($img_url)) {
+    $parts = array_filter(array_map('trim', explode(',', $img_url)));
+    if (count($parts) > 1) {
+      $carouselId = 'carousel_' . htmlspecialchars($auction_id);
+      echo '<div id="' . $carouselId . '" class="carousel slide" data-ride="carousel">';
+      echo '<div class="carousel-inner">';
+      $first = true;
+      foreach ($parts as $p) {
+        $img = normalize_image_src($p);
+        echo '<div class="carousel-item' . ($first ? ' active' : '') . '">';
         echo '<img src="' . htmlspecialchars($img) . '" class="card-img-top" alt="' . htmlspecialchars($title) . '">';
+        echo '</div>';
+        $first = false;
+      }
+      echo '</div>';
+      echo '<a class="carousel-control-prev" href="#' . $carouselId . '" role="button" data-slide="prev">';
+      echo '<span class="carousel-control-prev-icon" aria-hidden="true"></span>';
+      echo '<span class="sr-only">Previous</span>';
+      echo '</a>';
+      echo '<a class="carousel-control-next" href="#' . $carouselId . '" role="button" data-slide="next">';
+      echo '<span class="carousel-control-next-icon" aria-hidden="true"></span>';
+      echo '<span class="sr-only">Next</span>';
+      echo '</a>';
+      echo '</div>';
     } else {
-        echo '<img src="img/placeholder.png" class="card-img-top" alt="' . htmlspecialchars($title) . '">';
+      $first = normalize_image_src($parts[0]);
+      echo '<img src="' . htmlspecialchars($first) . '" class="card-img-top" alt="' . htmlspecialchars($title) . '">';
     }
+  } else {
+    echo '<img src="img/placeholder.png" class="card-img-top" alt="' . htmlspecialchars($title) . '">';
+  }
 
     echo '</a>';
 
@@ -153,6 +176,24 @@ function print_listing_card($auction_id, $title, $desc, $price, $num_bids, $end_
 
     echo '</div>';
     echo '</div>';
+}
+
+
+// normalize_image_src:
+// Ensure an image URL/path stored in DB becomes a usable src attribute for <img>.
+// Accepts absolute URLs, root-relative paths, or relative paths like "img/auctions/xxx.jpg".
+function normalize_image_src($src) {
+  $src = trim($src);
+  if ($src === '') return 'img/placeholder.png';
+
+  // If already an absolute URL, return as-is
+  if (preg_match('#^https?://#i', $src)) return $src;
+
+  // If it starts with a slash, assume root-relative and return
+  if (strpos($src, '/') === 0) return $src;
+
+  // Otherwise assume it's a relative path from the app root (e.g. 'img/auctions/..')
+  return $src;
 }
 
 ?>
